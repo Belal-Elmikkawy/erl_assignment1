@@ -3,3 +3,5 @@ __pycache__/
 build/
 install/
 log/
+test_commands/
+exprob_2026_assignment_aruco.pdf
