@@ -31,11 +31,11 @@ def generate_launch_description():
         description='Name of the URDF description to load'
     )
 
-    # Define the path to your URDF or Xacro file
+    # Path to the robot description
     urdf_file_path = PathJoinSubstitution([
-        pkg_erl1,  # Replace with your package name
+        pkg_erl1,
         "urdf",
-        LaunchConfiguration('model')  # Replace with your URDF or Xacro file
+        LaunchConfiguration('model')
     ])
 
     world_launch = IncludeLaunchDescription(

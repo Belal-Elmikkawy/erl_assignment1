@@ -1,0 +1,122 @@
+=====================================================================
+ TEST 1 - aruco_detector_node  (Requirement 1 - Perception)
+ Each block is one terminal. In EVERY new terminal run first:
+
+   source /opt/ros/jazzy/setup.bash
+   source ~/ros2_ws/install/setup.bash
+   PARAMS=$(ros2 pkg prefix erl1_assignment1)/share/erl1_assignment1/config/assignment_sim.yaml
+=====================================================================
+
+---------------------------------------------------------------------
+ T0  Build (once, after every code change)
+---------------------------------------------------------------------
+cd ~/ros2_ws
+colcon build --packages-select erl1_assignment1 --symlink-install
+source install/setup.bash
+
+---------------------------------------------------------------------
+ T1  Simulation (Gazebo + bridges + EKF + RViz)
+---------------------------------------------------------------------
+ros2 launch erl1_assignment1 spawn_assignment.launch.py
+#   without RViz:   ros2 launch erl1_assignment1 spawn_assignment.launch.py rviz:=false
+
+---------------------------------------------------------------------
+ T2  Check the inputs exist BEFORE starting the node
+---------------------------------------------------------------------
+ros2 topic hz /camera/image                 # expect ~20 Hz
+ros2 topic echo --once /camera/camera_info --field k
+#   expect k = [381.36, 0, 320, 0, 381.36, 240, 0, 0, 1]
+#   (fx = 320 / tan(1.396/2) = 381.36 -> this is reference_fx in the yaml)
+
+---------------------------------------------------------------------
+ T3  Run ONLY the detector (no hunter, so the robot does not move)
+---------------------------------------------------------------------
+ros2 run erl1_assignment1 aruco_detector_node.py --ros-args --params-file $PARAMS
+#   expect in the log:
+#     Subscribing to image topic: /camera/image
+#     CameraInfo received: fx=381.36, cx=320.00
+
+---------------------------------------------------------------------
+ T4  Check parameters and connections
+---------------------------------------------------------------------
+ros2 param get /aruco_detector_node aruco_dictionary_name   # DICT_ARUCO_ORIGINAL
+ros2 param get /aruco_detector_node marker_size_meters      # 0.2
+ros2 param get /aruco_detector_node use_sim_time            # True
+ros2 node info /aruco_detector_node
+ros2 topic info /camera/image -v       # the node must appear as a subscriber
+
+---------------------------------------------------------------------
+ T5  Detection output (one message per frame)
+---------------------------------------------------------------------
+ros2 topic hz /detected_marker               # same rate as the camera (~20 Hz)
+ros2 topic echo /detected_marker --field data
+#   layout: [cx, fx, id, u, v, s, ...]
+#   At the start box 1 is 4 m ahead (marker face at ~3.75 m), so expect about:
+#     [320.0, 381.36, 1.0, ~320, ~240, ~20]
+#   Pinhole check: s = fx * L / d = 381.36 * 0.2 / 3.75 = ~20 px
+#   If you only see [320.0, 381.36] -> no marker in view.
+#   If fx is 0.0 -> camera_info has not arrived yet.
+
+---------------------------------------------------------------------
+ T6  Debug image (every frame, circle + id)
+---------------------------------------------------------------------
+ros2 run rqt_image_view rqt_image_view /aruco_debug
+#   expect the green circle and "id 1" on the marker
+
+---------------------------------------------------------------------
+ T7  Move the robot by hand and watch s grow
+---------------------------------------------------------------------
+# terminal A
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+# terminal B
+ros2 topic echo /detected_marker --field data
+#   drive towards box 1: s must increase (~1/d). Stop when s ~ 166.
+#   Turn on the spot: u must move away from 320 and the marker must disappear when
+#   it leaves the image (message back to length 2).
+#   Rotate to see boxes 2 / 3 (right / left) and check their ids.
+
+---------------------------------------------------------------------
+ T8  /marker_image (only published when a marker is REACHED)
+---------------------------------------------------------------------
+# terminal A - the topic is latched (transient local), so the subscriber must use it too
+ros2 topic echo /marker_image --qos-durability transient_local --qos-reliability reliable --no-arr --once
+# terminal B - pretend the hunter reached marker 1 (it must be in view / seen before)
+ros2 topic pub --once /marker_reached std_msgs/msg/Int32 "{data: 1}"
+#   detector log:  Marker 1 reached: image published on /marker_image
+#   terminal A:    prints the header, height 480, width 640, encoding bgr8
+
+# see the picture:
+ros2 run rqt_image_view rqt_image_view /marker_image
+#   then publish /marker_reached again (rqt may not ask for the latched sample)
+
+# a marker never seen must NOT publish:
+ros2 topic pub --once /marker_reached std_msgs/msg/Int32 "{data: 3}"
+#   expect WARN: Marker 3 reached but it was never seen, no image published
+#   (only true if you never had box 3 in view since the node started)
+
+---------------------------------------------------------------------
+ T9  Negative tests on the parameters (stop T3 first)
+---------------------------------------------------------------------
+# wrong name -> must crash at start with: Unknown ArUco dictionary 'DICT_FOO'
+ros2 run erl1_assignment1 aruco_detector_node.py --ros-args --params-file $PARAMS \
+  -p aruco_dictionary_name:=DICT_FOO
+
+# valid but wrong dictionary -> runs, but /detected_marker stays [320.0, 381.36]
+ros2 run erl1_assignment1 aruco_detector_node.py --ros-args --params-file $PARAMS \
+  -p aruco_dictionary_name:=DICT_4X4_50
+
+# topic remap via parameter (proves topics are configurable, needed for the ROSbot)
+ros2 run erl1_assignment1 aruco_detector_node.py --ros-args --params-file $PARAMS \
+  -p detection_topic:=/test_detections
+ros2 topic echo /test_detections --field data
+
+# debug stream off (what you will use on the ROSbot)
+ros2 run erl1_assignment1 aruco_detector_node.py --ros-args --params-file $PARAMS \
+  -p publish_debug:=false
+ros2 topic hz /aruco_debug          # expect nothing
+
+=====================================================================
+ PASS when: correct fx/cx, id 1 detected at start with s ~ 20 px, s grows
+ when approaching, /aruco_debug shows circle + id, /marker_image appears
+ ONLY after /marker_reached, wrong dictionary name fails loudly.
+=====================================================================

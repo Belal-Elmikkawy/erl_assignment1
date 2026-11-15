@@ -29,7 +29,7 @@ def generate_launch_description():
     urdf = IncludeLaunchDescription(
         PathJoinSubstitution([FindPackageShare('urdf_launch'), 'launch', 'display.launch.py']),
         launch_arguments={
-            'urdf_package': 'erl1',
+            'urdf_package': 'erl1_assignment1',
             'urdf_package_path': PathJoinSubstitution(['urdf', LaunchConfiguration('model')]),
             'rviz_config': LaunchConfiguration('rvizconfig'),
             'jsp_gui': LaunchConfiguration('gui')}.items()

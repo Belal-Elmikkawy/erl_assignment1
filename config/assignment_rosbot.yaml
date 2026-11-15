@@ -1,0 +1,68 @@
+# Parameters for the real ROSbot.
+#   ros2 launch erl1_assignment1 hunt.launch.py \
+#       params_file:=$(ros2 pkg prefix erl1_assignment1)/share/erl1_assignment1/config/assignment_rosbot.yaml
+#
+# Check the topic names on the robot before the first run:
+#   export ROS_DOMAIN_ID=10        # rosbot_1=10, rosbot_2=11, rosbot_3=12
+#   ros2 topic list | grep -E "camera|odom|cmd_vel"
+#   ros2 topic echo /camera/color/camera_info --once      # read fx = K[0]
+# The top-level keys must match the node names.
+aruco_detector_node:
+  ros__parameters:
+    use_sim_time: false                              # wall clock
+    image_topic: /camera/color/image_raw
+    camera_info_topic: /camera/color/camera_info
+    detection_topic: /detected_marker
+    marker_image_topic: /marker_image
+    marker_reached_topic: /marker_reached
+    debug_image_topic: /aruco_debug
+    aruco_dictionary_name: DICT_ARUCO_ORIGINAL       # same printed markers as in simulation
+    marker_size_meters: 0.2
+    publish_debug: false                             # save Wi-Fi bandwidth (set true only to debug)
+
+treasure_hunter_node:
+  ros__parameters:
+    use_sim_time: false
+    detection_topic: /detected_marker
+    odom_topic: /odometry/filtered                   # ROSbot EKF output; use /odom if it does not exist
+    cmd_vel_topic: /cmd_vel
+    marker_reached_topic: /marker_reached
+    treasure_topic: /treasure_found
+    control_rate: 20.0
+
+    # Stop distance: sd = 166 * fx_rosbot / fx_sim (assignment, Requirement 2).
+    # fx_rosbot is read automatically from camera_info, so keep reference_fx = the SIM fx.
+    target_side_px: 166.0
+    reference_fx: 381.36
+    scale_target_with_fx: true
+
+    # Visual servoing: slower and gentler than in simulation (latency over Wi-Fi, real friction)
+    k_w: 0.002
+    k_v: 0.002
+    u_tolerance_px: 20.0
+    s_tolerance_px: 10.0
+    align_px: 120.0
+    reached_count: 3                 # more consecutive good detections: real images are noisier
+    min_marker_side_px: 40.0         # scale with fx if far markers are picked up
+    meas_hold_time: 0.8              # s, real camera frames arrive late / get dropped
+    lost_timeout: 3.0
+    reached_pause: 1.5
+
+    # Speeds: start slow, increase only after a successful run
+    forward_speed: 0.15
+    max_linear: 0.2
+    max_angular: 0.5
+
+    # Marker instructions (same as simulation)
+    instruction_ids: [1, 2, 3]
+    instruction_deltas_deg: [-90.0, 180.0, 90.0]
+    final_marker_id: 4
+
+    # Closed-loop rotation on the yaw from odometry
+    yaw_tolerance_deg: 3.0           # a bit looser: real yaw is noisier
+    k_rot: 1.0
+    max_rot: 0.5
+    min_rot: 0.2                     # real motors need more torque to start turning
+    heading_hold: true
+    k_heading: 0.8
+    snap_step_deg: 0.0               # no snapping: the room is not aligned with the start heading

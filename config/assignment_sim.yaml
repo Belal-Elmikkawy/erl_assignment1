@@ -1,0 +1,50 @@
+# Parameters for the Gazebo simulation (see assignment_rosbot.yaml for the real robot).
+# The top-level keys must match the node names.
+aruco_detector_node:
+  ros__parameters:
+    use_sim_time: true
+    image_topic: /camera/image
+    camera_info_topic: /camera/camera_info
+    detection_topic: /detected_marker
+    marker_image_topic: /marker_image
+    marker_reached_topic: /marker_reached
+    debug_image_topic: /aruco_debug
+    aruco_dictionary_name: DICT_ARUCO_ORIGINAL
+    marker_size_meters: 0.2
+    publish_debug: true
+
+treasure_hunter_node:
+  ros__parameters:
+    use_sim_time: true
+    detection_topic: /detected_marker
+    odom_topic: /odometry/filtered
+    cmd_vel_topic: /cmd_vel
+    marker_reached_topic: /marker_reached
+    treasure_topic: /treasure_found
+    control_rate: 20.0
+    target_side_px: 166.0
+    reference_fx: 381.36
+    scale_target_with_fx: true
+    k_w: 0.004
+    k_v: 0.005
+    u_tolerance_px: 15.0
+    s_tolerance_px: 6.0
+    align_px: 100.0
+    reached_count: 2
+    min_marker_side_px: 40.0
+    meas_hold_time: 0.6
+    lost_timeout: 2.0
+    reached_pause: 1.0
+    forward_speed: 0.4
+    max_linear: 0.45
+    max_angular: 1.0
+    instruction_ids: [1, 2, 3]
+    instruction_deltas_deg: [-90.0, 180.0, 90.0]
+    final_marker_id: 4
+    yaw_tolerance_deg: 2.0
+    k_rot: 1.5
+    max_rot: 1.0
+    min_rot: 0.15
+    heading_hold: true
+    k_heading: 1.0
+    snap_step_deg: 90.0     # world is aligned with the start heading
