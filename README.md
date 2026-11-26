@@ -40,8 +40,8 @@ once, so a marker seen again after a rotation is ignored.
 ```
 erl1_assignment1/
 ├── scripts/
-│   ├── aruco_detector_node.py     # Requirement 1: perception
-│   └── treasure_hunter_node.py    # Requirements 2 + 3: visual servoing, instructions, state machine
+│   ├── aruco_detector_node.py     # Function 1: marker perception
+│   └── treasure_hunter_node.py    # Functions 2 + 3: visual servoing, instruction execution, state machine
 ├── config/
 │   ├── assignment_sim.yaml        # parameters for Gazebo
 │   ├── assignment_rosbot.yaml     # parameters for the real ROSbot
@@ -66,8 +66,8 @@ Purple: nodes written for this assignment. Grey: Gazebo / existing ROS packages.
 flowchart TB
     GZ["Gazebo + ros_gz bridges<br/>(camera, diff drive, IMU)"]
     EKF["ekf_filter_node<br/>(robot_localization)"]
-    DET["aruco_detector_node<br/>Req. 1 – perception"]
-    HUN["treasure_hunter_node<br/>Req. 2 + 3 – servoing + state machine"]
+    DET["aruco_detector_node<br/>Function 1 – perception"]
+    HUN["treasure_hunter_node<br/>Functions 2 + 3 – servoing + instructions"]
     VIEW["rqt_image_view"]
     OUT["terminal / ros2 topic echo"]
 
@@ -124,7 +124,7 @@ published from the terminal), and the same code runs in simulation and on the ro
 - `id`: marker id; `u, v`: marker centre (pixels); `s`: apparent side of the marker (pixels, mean of the 4 sides)
 - A frame without markers is just `[cx, fx]`.
 
-Example: `[320.0, 381.36, 1.0, 300.0, 240.0, 20.0]` → marker 1 is 20 px right of... left of the centre
+Example: `[320.0, 381.36, 1.0, 300.0, 240.0, 20.0]` → marker 1 is 20 px left of the centre
 (u = 300 < cx = 320) and 20 px wide, i.e. about `381.36 · 0.2 / 20 ≈ 3.8 m` away.
 
 ## 4. Requirement 1 – Perception (`aruco_detector_node`)
