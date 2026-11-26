@@ -127,77 +127,133 @@ published from the terminal), and the same code runs in simulation and on the ro
 Example: `[320.0, 381.36, 1.0, 300.0, 240.0, 20.0]` → marker 1 is 20 px left of the centre
 (u = 300 < cx = 320) and 20 px wide, i.e. about `381.36 · 0.2 / 20 ≈ 3.8 m` away.
 
-## 4. Requirement 1 – Perception (`aruco_detector_node`)
+## 4. Function 1 – Marker Perception (`aruco_detector_node`)
 
-1. Each image is converted with `cv_bridge`, turned to grayscale and passed to `cv2.aruco` with the dictionary
-   from the parameter `aruco_dictionary_name` (`DICT_ARUCO_ORIGINAL`). A wrong dictionary name stops the node
-   at start-up instead of failing silently. Both the old (≤ 4.6) and new (≥ 4.7) OpenCV ArUco APIs are supported.
-2. For every marker: centre `(u, v)` = mean of the 4 corners, size `s` = mean length of the 4 sides.
-3. One `/detected_marker` message is published per frame (also when nothing is seen, so the controller knows).
-4. The last frame where each id was seen is kept. When `/marker_reached` arrives, that frame is published on
-   `/marker_image` with a green circle and `id N`, as in the assignment:
+**Purpose.** Convert the raw camera stream into a compact, per-frame description of every visible marker,
+and provide visual evidence each time a marker is reached.
+
+| Interface | Topic | Type |
+|---|---|---|
+| Input | `image_topic` (`/camera/image`) | `sensor_msgs/Image` |
+| Input | `camera_info_topic` (`/camera/camera_info`) | `sensor_msgs/CameraInfo` |
+| Input | `marker_reached_topic` (`/marker_reached`) | `std_msgs/Int32` |
+| Output | `detection_topic` (`/detected_marker`) | `std_msgs/Float32MultiArray` |
+| Output | `marker_image_topic` (`/marker_image`) | `sensor_msgs/Image` (latched) |
+| Output | `debug_image_topic` (`/aruco_debug`) | `sensor_msgs/Image` (optional) |
+
+**Processing pipeline (per frame).**
+
+1. **Acquisition** – the ROS image is converted to OpenCV (`cv_bridge`, `bgr8`) and then to grayscale.
+2. **Detection** – `cv2.aruco` detects the markers of the configured dictionary (`DICT_ARUCO_ORIGINAL`) and
+   returns, for each one, its id and its four corners.
+3. **Feature extraction** – for every marker:
+   - centre `(u, v)` = mean of the four corners;
+   - apparent size `s` = mean length of the four sides (robust to moderate viewing angles).
+4. **Publication** – one `/detected_marker` message is published per frame, `[cx, fx, id, u, v, s, ...]`, where
+   `cx` and `fx` come from the camera intrinsics (`K[2]`, `K[0]`). An empty frame is published as `[cx, fx]`, so the
+   controller can distinguish *no marker visible* from *no data*.
+5. **Evidence on demand** – the last frame in which each id was seen is cached. When the controller publishes the id
+   on `/marker_reached`, that frame is annotated with a green circle and the label `id N` and published once on
+   `/marker_image`, using the drawing prescribed by the assignment:
    ```python
    cv2.circle(img, (cx, cy), r, (0, 255, 0), 3)
    cv2.putText(img, f"id {marker_id}", (cx - r, cy - r - 10), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
    ```
-   `/marker_image` is latched (transient local), so a viewer opened later still gets the last image.
-5. All topic names and the dictionary are ROS parameters (YAML + launch file).
 
-The camera subscriptions use the sensor-data QoS (best effort), which is compatible with both reliable and
-best-effort camera publishers.
+**Design choices.**
 
-## 5. Requirement 2 – Visual servoing (`treasure_hunter_node`, state `SERVO`)
+- **Separation of concerns:** the node never commands the robot; it only measures.
+- **QoS:** camera subscriptions use the sensor-data profile (best effort), compatible with both reliable and
+  best-effort camera drivers. `/marker_image` is *transient local*, so a viewer started later still receives the
+  last image.
+- **Fail-fast configuration:** an unknown dictionary name stops the node at start-up instead of silently detecting
+  nothing.
+- **Portability:** both the legacy (≤ 4.6) and current (≥ 4.7) OpenCV ArUco APIs are supported, and every topic
+  name is a ROS parameter, so the node runs unchanged in simulation and on the ROSbot.
 
-Image-based: the errors are computed directly on the image features, no 3D pose is estimated.
+## 5. Function 2 – Image-Based Visual Servoing (`treasure_hunter_node`, state `SERVO`)
 
-| | Law | Meaning |
+**Purpose.** Drive the robot in front of the selected marker, centred and at the prescribed distance, using image
+features only. No 3D pose of the marker is estimated.
+
+**Control law.** Two decoupled proportional controllers act on the pixel errors:
+
+| Loop | Law | Behaviour |
 |---|---|---|
-| Align | `ω = −k_ω (u − cx)` | marker on the right (`u > cx`) → turn right (negative ω) |
-| Approach | `v = k_v (s_d − s)` | marker too small (far) → forward; too big (close) → backward |
+| Heading (alignment) | `ω = −k_ω (u − cx)` | marker on the right (`u > cx`) → turn right (`ω < 0`) |
+| Range (approach) | `v = k_v (s_d − s)` | marker too small (far) → forward; too large (close) → backward |
 
-The marker is **reached** when `|u − cx| < u_tolerance_px` and `|s_d − s| < s_tolerance_px` for
-`reached_count` consecutive frames.
+`s_d` is the desired apparent side of the marker (166 px in simulation, ≈ 0.46 m from the camera).
 
-**Numeric example (simulation gains `k_ω = 0.004`, `k_v = 0.005`, `s_d = 166 px`):**
-marker at `u = 400`, `s = 100` → `u − cx = +80 px` → `ω = −0.32 rad/s` (turn right);
-`s_d − s = 66 px` → `v = 0.33 m/s`, then reduced because the marker is not centred (see below).
+**Convergence criterion.** The marker is declared *reached* when `|u − cx| < u_tolerance_px` and
+`|s_d − s| < s_tolerance_px` hold for `reached_count` consecutive, distinct camera frames. Requiring several new
+frames rejects single noisy detections.
 
-**Additions to the basic law (all parameters):**
+**Numeric example** (simulation: `k_ω = 0.004`, `k_v = 0.005`, `s_d = 166 px`, `align_px = 100`):
+marker at `u = 400`, `s = 100` →
+`u − cx = +80 px` → `ω = −0.32 rad/s` (turn right);
+`s_d − s = +66 px` → `v = 0.33 m/s`, scaled by `1 − 80/100 = 0.2` → `v ≈ 0.07 m/s`.
 
-- *Align first, then approach:* `v` is multiplied by `max(0, 1 − |u − cx| / align_px)`, so the robot does not
-  drive forward while the marker is far from the image centre.
-- *Small dead-bands* (30 % of the u tolerance, 50 % of the s tolerance) avoid chattering around the target.
-- *Far markers are ignored* while searching (`min_marker_side_px = 40`, ≈ 1.9 m in simulation): their size is
-  too noisy to servo on.
-- *Missing frames:* the last measurement is reused for `meas_hold_time`; after `lost_timeout` without the
-  marker the robot goes back to searching.
+**Robustness extensions** (all configurable):
 
-**Same stopping distance on the ROSbot (pinhole model).** The apparent size is `s = f · L / d`. To stop at the
-same distance `d` with a different camera, the target is scaled with the focal lengths:
+- **Align, then approach:** `v` is multiplied by `max(0, 1 − |u − cx| / align_px)`, so the robot does not move
+  forward while the marker is far from the optical axis and could leave the field of view.
+- **Dead-bands** (30 % of the u tolerance, 50 % of the s tolerance) suppress chattering around the set-point.
+- **Target selection:** while searching, markers smaller than `min_marker_side_px` (≈ 1.9 m in simulation) are
+  ignored, and the largest (closest) unused marker is selected.
+- **Measurement loss:** the last measurement is reused for up to `meas_hold_time`; beyond that the robot stops and
+  waits, and after `lost_timeout` it returns to searching.
+- **Saturation:** every command is limited by `max_linear` / `max_angular` before publication.
+
+**Camera independence (pinhole model).** The apparent size is `s = f · L / d`. To stop at the same distance `d`
+with a different camera, the set-point is scaled with the focal lengths:
 
 ```
-s_d(ROSbot) = 166 · fx_ROSbot / fx_sim,     fx_sim = 381.36 px  (640 px wide, 1.396 rad FOV)
+s_d = 166 · fx / fx_sim,     fx_sim = 381.36 px  (640 px wide image, 1.396 rad horizontal FOV)
 ```
 
-`fx_ROSbot` is read automatically from `camera_info` (`scale_target_with_fx: true`, `reference_fx: 381.36`).
+`fx` is read online from `camera_info` (`scale_target_with_fx: true`, `reference_fx: 381.36`), so no manual
+retuning of `s_d` is needed on the ROSbot.
 
-## 6. Requirement 3 – Executing the instructions (states `REACHED`, `ROTATE`, `FOUND`)
+## 6. Function 3 – Instruction Execution (states `REACHED`, `ROTATE`, `FOUND`)
 
-- **Closed-loop rotation, not timed.** The yaw is read from `/odometry/filtered`:
-  ```python
-  yaw = math.atan2(2*(q.w*q.z + q.x*q.y), 1 - 2*(q.y**2 + q.z**2))
-  target = wrap(yaw_at_marker + delta)            # delta: −90°, +180°, +90°
-  err = math.atan2(math.sin(target - yaw), math.cos(target - yaw))
-  ω = sign(err) · clamp(k_rot·|err|, min_rot, max_rot)    until |err| < yaw_tolerance_deg
-  ```
-  All angles are normalised to [−π, π]. For the 180° turn, where ±π is ambiguous, the planned direction is kept.
-- **Go ahead** after each rotation, holding the new heading (`ω = k_heading · (heading − yaw)`).
-- **Each marker only once:** a reached id is added to a `done` set and ignored for the rest of the run, even if
-  it appears again in the image (this happens after the 180° turn at marker 2, when marker 1 is visible again).
-- **Marker 4:** the robot stops for ever and publishes `"Treasure found! (marker 4)"` on `/treasure_found`.
-- *Simulation only:* `snap_step_deg: 90` rounds the turn target to a multiple of 90° from the start heading,
-  removing the small heading error left by the approach (the boxes are aligned with the world axes).
-  It is off on the ROSbot (`0.0`).
+**Purpose.** Execute the instruction associated with each reached marker, then resume the search, until the final
+marker ends the hunt.
+
+**Instruction table** (parameters `instruction_ids`, `instruction_deltas_deg`, `final_marker_id`):
+
+| Marker | Δ yaw | Action |
+|:-:|:-:|---|
+| 1 | −90° | turn right, then go ahead |
+| 2 | +180° | turn around, then go ahead |
+| 3 | +90° | turn left, then go ahead |
+| 4 | – | stop, publish `/treasure_found` |
+
+**Execution sequence.**
+
+1. **Acknowledge** – the id is added to the `done` set and published on `/marker_reached` (which triggers
+   `/marker_image` in Function 1). The robot holds still for `reached_pause`.
+2. **Plan the rotation** – the heading is read from `/odometry/filtered` and the target is computed as
+   `target = wrap(yaw + Δ)`. In simulation (`snap_step_deg: 90`) the target is rounded to the nearest multiple of 90°
+   from the start heading, removing the residual heading error left by the approach; this is disabled on the
+   ROSbot (`0.0`).
+3. **Rotate in closed loop** – a saturated proportional controller turns the robot until the error is below
+   `yaw_tolerance_deg`:
+   ```python
+   yaw = math.atan2(2*(q.w*q.z + q.x*q.y), 1 - 2*(q.y**2 + q.z**2))
+   err = math.atan2(math.sin(target - yaw), math.cos(target - yaw))      # normalised to [-π, π]
+   ω   = sign(err) · clamp(k_rot·|err|, min_rot, max_rot)
+   ```
+   `min_rot` overcomes static friction near the target; `max_rot` bounds the speed. For the 180° turn, where
+   `±π` is ambiguous, the planned direction of rotation is enforced to avoid oscillation.
+4. **Resume the search** – the robot goes ahead along the new heading, which is actively held by
+   `ω = k_heading · (heading − yaw)`.
+
+**Marker bookkeeping.** Each id is executed exactly once: ids in `done` are ignored for the rest of the run, even
+when they re-enter the image (e.g. marker 1 becomes visible again after the 180° turn at marker 2).
+
+**Termination.** When `final_marker_id` is reached, the robot enters `FOUND`, publishes
+`"Treasure found! (marker 4)"` on `/treasure_found` and keeps commanding zero velocity.
 
 ## 7. State machine (`treasure_hunter_node`)
 
